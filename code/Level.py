@@ -1,8 +1,10 @@
+import sys
+
 import pygame
 from code.EntityFactory import EntityFactory
 from code.EntityMediator import EntityMediator
 from code.Const import (C_WHITE, WIN_WIDTH, WIN_HEIGHT, SCORE_ENEMY_DESTROYED,
-                        C_GREEN, C_RED, DIFFICULTY_SETTINGS, SPRITE_BACKGROUNDS)
+                        C_GREEN, C_RED, DIFFICULTY_SETTINGS, SPRITE_BACKGROUNDS, PLAYER_KEY_ESCAPE)
 
 
 class Level:
@@ -72,8 +74,33 @@ class Level:
         return "next_level" if not self.enemies else "menu"
 
     def handle_events(self):
+        """
+        Processa os eventos do jogo.
+        Usa o handle_input do Player e verifica o ESC.
+        """
         for event in pygame.event.get():
-            if event.type == pygame.QUIT: self.running = False
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+
+            if event.type == pygame.KEYDOWN:
+                # Detecta a tecla ESC para voltar ao Menu
+                if event.key == PLAYER_KEY_ESCAPE:
+                    self.running = False
+                    return "MENU"
+
+        # 1. Processa entrada do Player (Movimento e Gatilho)
+        # handle_input() define vx/vy e retorna True se o Espaço estiver pressionado
+        is_shooting = self.player.handle_input()
+
+        # 2. Verifica se pode atirar
+        if self.player.can_shoot(is_shooting):
+            # Aqui você chama a sua Factory para criar o tiro, ex:
+            # self.player.shoot()
+            # self.entity_factory.create_player_shot(self.player)
+            pass
+
+        return "PLAYING"
 
     def update(self):
         # Update do Player

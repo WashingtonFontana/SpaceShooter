@@ -135,7 +135,7 @@ SOUND_PLAYER_SHOOT = 'player_shoot.wav'
 SOUND_ENEMY_SHOOT = 'enemy_shoot.wav'
 SOUND_EXPLOSION = 'explosion.wav'
 SOUND_PLAYER_HIT = 'player_hit.wav'
-MUSIC_BACKGROUND = 'Fund_music.mp3'
+MUSIC_BACKGROUND = 'Level.mp3'
 MUSIC_MENU = 'Menu.mp3'
 
 # ============================================================================
