@@ -1,133 +1,74 @@
 import pygame
 from code.Entity import Entity
 from code.AssetManager import AssetManager
-from code.Const import (PLAYER_SPEED, PLAYER_HEALTH, PLAYER_SHOOT_INTERVAL,
-                        WIN_WIDTH, WIN_HEIGHT, C_LIGHT_BLUE, SPRITE_PLAYER,
-                        SOUND_PLAYER_SHOOT)
+from code.Const import (PLAYER_HEALTH, PLAYER_SHOOT_INTERVAL, SPRITE_PLAYER,
+                        SOUND_PLAYER_SHOOT, PLAYER_SPEED, WIN_WIDTH, WIN_HEIGHT,
+                        PLAYER_KEY_LEFT, PLAYER_KEY_RIGHT, PLAYER_KEY_UP,
+                        PLAYER_KEY_DOWN, PLAYER_KEY_SHOOT)
 
 
 class Player(Entity):
-    """
-    Classe que representa o jogador.
-
-    Atributos:
-        shoot_cooldown (int): Cooldown de tiro
-        max_shots (int): Máximo de tiros simultâneos
-        active_shots (list): Tiros ativos
-        asset_manager (AssetManager): Gerenciador de assets
-    """
-
-    def __init__(self, name: str, x: float, y: float, width: int = 40,
-                 height: int = 40, asset_manager: AssetManager = None):
-        """
-        Inicializa o jogador.
-
-        Args:
-            name (str): Nome do jogador
-            x (float): Posição X
-            y (float): Posição Y
-            width (int): Largura
-            height (int): Altura
-            asset_manager (AssetManager): Gerenciador de assets
-        """
+    def __init__(self, name: str, x: float, y: float, width: int, height: int, asset_manager: AssetManager = None):
         super().__init__(name, x, y, width, height)
-
-        self.speed = PLAYER_SPEED
         self.health = PLAYER_HEALTH
+        self.asset_manager = asset_manager or AssetManager()
+        self.image = self.asset_manager.load_sprite(SPRITE_PLAYER, (width, height))
+        self.rect = self.image.get_rect(topleft=(int(x), int(y)))
+
+        # Controle de tiro
         self.shoot_cooldown = 0
         self.shoot_interval = PLAYER_SHOOT_INTERVAL
-        self.active_shots = []
-        self.asset_manager = asset_manager or AssetManager()
 
-        # Carregar sprite
-        self.image = self.asset_manager.load_sprite(SPRITE_PLAYER, (width, height))
-        self.rect = self.image.get_rect()
-        self.rect.x = int(x)
-        self.rect.y = int(y)
+    def handle_input(self):
+        """Processa entrada do teclado para movimento e retorna estado do gatilho."""
+        keys = pygame.key.get_pressed()
 
-    def handle_input(self, keys: dict):
-        """
-        Processa entrada do teclado.
+        self.vx = 0
+        self.vy = 0
 
-        Args:
-            keys (dict): Dicionário de teclas pressionadas
-        """
-        from code.Const import (PLAYER_KEY_LEFT, PLAYER_KEY_RIGHT,
-                                PLAYER_KEY_UP, PLAYER_KEY_DOWN)
+        if keys[PLAYER_KEY_LEFT]:
+            self.vx = -PLAYER_SPEED
+        elif keys[PLAYER_KEY_RIGHT]:
+            self.vx = PLAYER_SPEED
 
-        # Movimento horizontal
-        if keys.get(PLAYER_KEY_LEFT):
-            self.vx = -self.speed
-        elif keys.get(PLAYER_KEY_RIGHT):
-            self.vx = self.speed
-        else:
-            self.vx = 0
+        if keys[PLAYER_KEY_UP]:
+            self.vy = -PLAYER_SPEED
+        elif keys[PLAYER_KEY_DOWN]:
+            self.vy = PLAYER_SPEED
 
-        # Movimento vertical
-        if keys.get(PLAYER_KEY_UP):
-            self.vy = -self.speed
-        elif keys.get(PLAYER_KEY_DOWN):
-            self.vy = self.speed
-        else:
-            self.vy = 0
+        return keys[PLAYER_KEY_SHOOT]
 
     def update(self):
-        """Atualiza o jogador."""
-        # Aplicar velocidade
+        """Atualiza posição, limites e cooldown."""
         self.apply_velocity()
 
-        # Limitar aos limites da tela
-        self.x = max(0, min(WIN_WIDTH - self.width, self.x))
-        self.y = max(0, min(WIN_HEIGHT - self.height, self.y))
+        # Boundary Check - Mantém o jogador dentro da janela
+        self.x = max(0.0, min(float(self.x), float(WIN_WIDTH - self.width)))
+        self.y = max(0.0, min(float(self.y), float(WIN_HEIGHT - self.height)))
 
+        # Sincroniza o Rect para desenho nítido
         self.rect.x = int(self.x)
         self.rect.y = int(self.y)
 
-        # Atualizar cooldown de tiro
         if self.shoot_cooldown > 0:
             self.shoot_cooldown -= 1
 
-    def draw(self, surface: pygame.Surface):
-        """
-        Desenha o jogador na tela.
+    def can_shoot(self, is_shoot_pressed: bool):
+        """Verifica se o jogador pressionou a tecla e se o tempo de recarga acabou."""
+        return is_shoot_pressed and self.shoot_cooldown <= 0
 
-        Args:
-            surface (pygame.Surface): Superfície para desenhar
-        """
+    def shoot(self):
+        """Reseta o relógio da arma e toca o som de disparo."""
+        self.shoot_cooldown = self.shoot_interval
+        self.asset_manager.play_sound(SOUND_PLAYER_SHOOT)
+        return True
+
+    def draw(self, surface: pygame.Surface):
         surface.blit(self.image, self.rect)
 
-    def can_shoot(self) -> bool:
-        """
-        Verifica se pode atirar.
-
-        Returns:
-            bool: True se pode atirar
-        """
-        return self.shoot_cooldown <= 0
-
-    def shoot(self) -> bool:
-        """
-        Tira um tiro.
-
-        Returns:
-            bool: True se conseguiu atirar
-        """
-        if self.can_shoot():
-            self.shoot_cooldown = self.shoot_interval
-            self.asset_manager.play_sound(SOUND_PLAYER_SHOOT)
-            return True
-        return False
-
     def take_damage(self, damage: int):
-        """
-        Aplica dano ao jogador.
-
-        Args:
-            damage (int): Quantidade de dano
-        """
         super().take_damage(damage)
         self.asset_manager.play_sound('player_hit.wav')
 
     def __repr__(self) -> str:
-        """Representação em string do jogador."""
-        return f"Player(pos=({self.x}, {self.y}), health={self.health}, cooldown={self.shoot_cooldown})"
+        return f"Player(pos=({self.x}, {self.y}), health={self.health})"

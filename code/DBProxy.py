@@ -1,308 +1,128 @@
 import sqlite3
 import os
-from datetime import datetime
+# O import 'from datetime import datetime' foi removido para eliminar o erro de 'Unused import'
 from code.Const import DB_PATH, DB_TABLE_SCORES
 
 
 class DBProxy:
     """
-    Proxy que controla o acesso ao banco de dados.
-
-    Implementa cache, validação e controle de acesso.
+    Proxy que controla o acesso ao banco de dados SQLite.
+    Implementa cache para consultas de High Scores e garante a integridade dos dados.
     """
 
     def __init__(self, db_path: str = DB_PATH):
-        """
-        Inicializa o proxy.
-
-        Args:
-            db_path (str): Caminho do banco de dados
-        """
+        """Inicializa o proxy e configura o banco de dados."""
         self.db_path = db_path
         self.connection = None
         self.cache = {}
+        self._table_name = DB_TABLE_SCORES
         self._initialize_db()
 
     def _initialize_db(self):
-        """Inicializa o banco de dados."""
+        """Cria o diretório e a tabela inicial se não existirem."""
         try:
-            # Garantir que o diretório existe
             db_dir = os.path.dirname(self.db_path)
             if db_dir and not os.path.exists(db_dir):
                 os.makedirs(db_dir)
 
-            # Criar conexão com timeout
-            self.connection = sqlite3.connect(self.db_path, timeout=10.0)
-            self.connection.isolation_level = None  # Autocommit mode
-
-            cursor = self.connection.cursor()
-
-            # Criar tabela se não existir
-            create_table_sql = f'''
-                CREATE TABLE IF NOT EXISTS {DB_TABLE_SCORES} (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    player_name TEXT NOT NULL,
-                    score INTEGER NOT NULL,
-                    level INTEGER NOT NULL,
-                    date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            '''
-
-            cursor.execute(create_table_sql)
-            self.connection.commit()
-
-            print(f"✓ Banco de dados inicializado: {os.path.abspath(self.db_path)}")
-            print(f"✓ Conexão SQLite estabelecida com sucesso")
-
-        except Exception as e:
+            self._ensure_connection()
+            with self.connection:
+                cursor = self.connection.cursor()
+                # O campo 'date' usa o timestamp nativo do SQLite
+                cursor.execute(f'''
+                    CREATE TABLE IF NOT EXISTS {self._table_name} (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        player_name TEXT NOT NULL,
+                        score INTEGER NOT NULL,
+                        level INTEGER NOT NULL,
+                        date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+            print(f"✓ Banco de dados inicializado em: {os.path.abspath(self.db_path)}")
+        except sqlite3.Error as e:
             print(f"✗ Erro ao inicializar banco de dados: {e}")
-            print(f"✗ Caminho tentado: {os.path.abspath(self.db_path)}")
 
     def _ensure_connection(self):
-        """Garante que a conexão está aberta."""
+        """Garante que a conexão com o banco de dados esteja ativa."""
         try:
             if self.connection is None:
                 self.connection = sqlite3.connect(self.db_path, timeout=10.0)
-                self.connection.isolation_level = None
-                print("✓ Conexão com banco de dados restaurada")
+                self.connection.row_factory = sqlite3.Row
             else:
-                # Testar se a conexão está viva
                 self.connection.execute('SELECT 1')
-        except Exception as e:
-            print(f"⚠ Reconectando ao banco de dados: {e}")
-            try:
-                self.connection = sqlite3.connect(self.db_path, timeout=10.0)
-                self.connection.isolation_level = None
-            except Exception as e2:
-                print(f"✗ Erro ao reconectar: {e2}")
+        except (sqlite3.Error, AttributeError):
+            self.connection = sqlite3.connect(self.db_path, timeout=10.0)
 
     def save_score(self, player_name: str, score: int, level: int) -> bool:
-        """
-        Salva uma pontuação no banco de dados.
-
-        Args:
-            player_name (str): Nome do jogador
-            score (int): Pontuação
-            level (int): Nível alcançado
-
-        Returns:
-            bool: True se salvo com sucesso
-        """
+        """Salva uma nova pontuação e limpa o cache de consultas."""
         try:
-            # Garantir conexão
             self._ensure_connection()
+            name = str(player_name).strip()[:50]
 
-            # Converter para tipos primitivos
-            player_name = str(player_name).strip()
-            score = int(score)
-            level = int(level)
-
-            # Validar entrada
-            if not player_name or len(player_name) > 50:
-                print("✗ Nome do jogador inválido")
+            if not name or score < 0 or level < 1:
+                print("⚠ Dados inválidos para salvamento de score.")
                 return False
 
-            if score < 0 or level < 1:
-                print("✗ Pontuação ou nível inválido")
-                return False
+            with self.connection:
+                self.connection.execute(
+                    f"INSERT INTO {self._table_name} (player_name, score, level) VALUES (?, ?, ?)",
+                    (name, int(score), int(level))
+                )
 
-            # Inserir no banco de dados
-            cursor = self.connection.cursor()
-
-            insert_sql = f'''
-                INSERT INTO {DB_TABLE_SCORES} (player_name, score, level)
-                VALUES (?, ?, ?)
-            '''
-
-            cursor.execute(insert_sql, (player_name, score, level))
-            self.connection.commit()
-
-            print(f"✓ Pontuação salva com sucesso: {player_name} - {score} pontos - Nível {level}")
-
-            # Limpar cache
             self.cache.clear()
+            print(f"✓ Pontuação de {name} salva com sucesso.")
             return True
-
-        except sqlite3.OperationalError as e:
-            print(f"✗ Erro operacional do SQLite: {e}")
-            return False
-        except sqlite3.IntegrityError as e:
-            print(f"✗ Erro de integridade do banco de dados: {e}")
-            return False
-        except Exception as e:
+        except sqlite3.Error as e:
             print(f"✗ Erro ao salvar pontuação: {e}")
-            import traceback
-            traceback.print_exc()
             return False
 
     def get_high_scores(self, limit: int = 10) -> list:
-        """
-        Obtém as maiores pontuações.
+        """Retorna as maiores pontuações usando cache para performance."""
+        cache_key = f"high_{limit}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
 
-        Args:
-            limit (int): Quantidade de pontuações a retornar
-
-        Returns:
-            list: Lista de pontuações
-        """
         try:
-            # Garantir conexão
             self._ensure_connection()
-
-            # Verificar cache
-            cache_key = f'high_scores_{limit}'
-            if cache_key in self.cache:
-                return self.cache[cache_key]
-
-            # Buscar do banco de dados
             cursor = self.connection.cursor()
-
-            select_sql = f'''
-                SELECT player_name, score, level, date
-                FROM {DB_TABLE_SCORES}
-                ORDER BY score DESC
-                LIMIT ?
-            '''
-
-            cursor.execute(select_sql, (limit,))
-            scores = cursor.fetchall()
-
-            # Armazenar em cache
-            self.cache[cache_key] = scores
-
-            return scores
-
-        except Exception as e:
-            print(f"✗ Erro ao obter pontuações: {e}")
-            return []
-
-    def get_player_scores(self, player_name: str) -> list:
-        """
-        Obtém as pontuações de um jogador específico.
-
-        Args:
-            player_name (str): Nome do jogador
-
-        Returns:
-            list: Lista de pontuações do jogador
-        """
-        try:
-            # Garantir conexão
-            self._ensure_connection()
-
-            # Verificar cache
-            cache_key = f'player_scores_{player_name}'
-            if cache_key in self.cache:
-                return self.cache[cache_key]
-
-            # Buscar do banco de dados
-            cursor = self.connection.cursor()
-
-            select_sql = f'''
-                SELECT player_name, score, level, date
-                FROM {DB_TABLE_SCORES}
-                WHERE player_name = ?
-                ORDER BY score DESC
-            '''
-
-            cursor.execute(select_sql, (player_name,))
-            scores = cursor.fetchall()
-
-            # Armazenar em cache
-            self.cache[cache_key] = scores
-
-            return scores
-
-        except Exception as e:
-            print(f"✗ Erro ao obter pontuações do jogador: {e}")
+            cursor.execute(
+                f"SELECT player_name, score, level, date FROM {self._table_name} ORDER BY score DESC LIMIT ?",
+                (limit,)
+            )
+            results = [tuple(row) for row in cursor.fetchall()]
+            self.cache[cache_key] = results
+            return results
+        except sqlite3.Error as e:
+            print(f"✗ Erro ao obter High Scores: {e}")
             return []
 
     def get_total_scores(self) -> int:
-        """
-        Obtém a quantidade total de pontuações salvas.
-
-        Returns:
-            int: Quantidade
-        """
+        """Retorna o número total de registros salvos."""
         try:
-            # Garantir conexão
             self._ensure_connection()
-
             cursor = self.connection.cursor()
-            cursor.execute(f'SELECT COUNT(*) FROM {DB_TABLE_SCORES}')
-            count = cursor.fetchone()[0]
-            return count
-
-        except Exception as e:
-            print(f"✗ Erro ao contar pontuações: {e}")
+            cursor.execute(f"SELECT COUNT(*) FROM {self._table_name}")
+            return cursor.fetchone()[0]
+        except sqlite3.Error:
             return 0
 
-    def delete_score(self, score_id: int) -> bool:
-        """
-        Deleta uma pontuação.
-
-        Args:
-            score_id (int): ID da pontuação
-
-        Returns:
-            bool: True se deletado com sucesso
-        """
-        try:
-            # Garantir conexão
-            self._ensure_connection()
-
-            cursor = self.connection.cursor()
-            cursor.execute(f'DELETE FROM {DB_TABLE_SCORES} WHERE id = ?', (score_id,))
-            self.connection.commit()
-
-            # Limpar cache
-            self.cache.clear()
-
-            print(f"✓ Pontuação deletada: ID {score_id}")
-            return True
-
-        except Exception as e:
-            print(f"✗ Erro ao deletar pontuação: {e}")
-            return False
-
     def clear_all_scores(self) -> bool:
-        """
-        Deleta todas as pontuações.
-
-        Returns:
-            bool: True se deletado com sucesso
-        """
+        """Remove permanentemente todas as pontuações do banco."""
         try:
-            # Garantir conexão
             self._ensure_connection()
-
-            cursor = self.connection.cursor()
-            cursor.execute(f'DELETE FROM {DB_TABLE_SCORES}')
-            self.connection.commit()
-
-            # Limpar cache
+            with self.connection:
+                self.connection.execute(f"DELETE FROM {self._table_name}")
             self.cache.clear()
-
-            print("✓ Todas as pontuações foram deletadas")
             return True
-
-        except Exception as e:
-            print(f"✗ Erro ao deletar pontuações: {e}")
+        except sqlite3.Error as e:
+            print(f"✗ Erro ao limpar scores: {e}")
             return False
 
     def close(self):
         """Fecha a conexão com o banco de dados."""
         if self.connection:
-            try:
-                self.connection.close()
-                print("✓ Conexão com banco de dados fechada")
-            except Exception as e:
-                print(f"⚠ Erro ao fechar conexão: {e}")
-
-    def __del__(self):
-        """Destrutor que fecha a conexão."""
-        self.close()
+            self.connection.close()
+            self.connection = None
 
     def __repr__(self) -> str:
-        """Representação em string do proxy."""
-        return f"DBProxy(db_path='{self.db_path}', total_scores={self.get_total_scores()})"
+        return f"DBProxy(path='{self.db_path}', entries={self.get_total_scores()})"
