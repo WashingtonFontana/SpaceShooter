@@ -12,16 +12,14 @@ from code.Const import (WIN_WIDTH, WIN_HEIGHT, WIN_TITLE, FPS, BACKGROUND_COLOR,
 
 
 class Game:
-    """
-    Classe principal que orquestra todo o jogo, gerenciando estados e transições.
-    """
-
+    """Classe mestre que controla as transições entre telas e o fluxo do jogo."""
     def __init__(self):
-        """Inicializa o motor do jogo e os recursos básicos."""
+        """Inicializa o Pygame, a janela, o áudio e os gerenciadores de dados."""
         pygame.init()
         try:
             pygame.mixer.init()
         except pygame.error as e:
+            # Caso o computador não tenha saída de áudio, desativa o som para evitar erro fatal
             print(f"⚠ Aviso: Não foi possível inicializar áudio: {e}")
             os.environ['SDL_AUDIODRIVER'] = 'dummy'
 
@@ -34,7 +32,7 @@ class Game:
         self.current_level = 1
         self.difficulty = DIFFICULTY_NORMAL
 
-        # Gerenciadores de recursos e banco de dados
+        # Configura o caminho das pastas e inicia Banco de Dados e Gerenciador de Arquivos
         assets_path = os.path.join(os.path.dirname(__file__), '..', 'assets')
         self.asset_manager = AssetManager(assets_path)
         self.db_proxy = DBProxy()
@@ -45,7 +43,7 @@ class Game:
         print("✓ Jogo inicializado com sucesso!")
 
     def run(self):
-        """Loop mestre que alterna entre os estados do jogo."""
+        """Loop principal que decide qual estado (menu, jogando, fim) deve ser executado."""
         while self.running:
             if self.state == GAME_STATE_MENU:
                 self._run_menu()
@@ -56,29 +54,31 @@ class Game:
             elif self.state == GAME_STATE_WIN:
                 self._run_win()
 
+        # Ao sair do loop, limpa os recursos da memória
         self._cleanup()
 
     def _run_menu(self):
-        """Gerencia a exibição e interação do menu principal."""
+        """Gerencia o menu inicial e as escolhas do jogador (Novo Jogo, Ranking ou Sair)."""
         self.asset_manager.play_music(MUSIC_MENU, loops=-1)
         self.menu = Menu(self.window)
         option_id = self.menu.run()
 
-        if option_id == -1:
+        if option_id == -1: # Fechar janela
             self.running = False
-        elif option_id == 0:  # NEW GAME
+        elif option_id == 0:  # Iniciar novo jogo
             self.current_level = 1
             self.state = GAME_STATE_PLAYING
-        elif option_id == 1:  # HIGH SCORES
+        elif option_id == 1:  # Ver recordes
             self._show_high_scores()
-        elif option_id == 2:  # EXIT
+        elif option_id == 2:  # Sair do jogo
             self.running = False
 
     def _run_level(self):
-        """Inicia e processa um nível de combate."""
+        """Cria e executa a fase atual, trocando a música e gerenciando o resultado (vitória/derrota)."""
         self.asset_manager.stop_music()
         self.asset_manager.play_music(MUSIC_BACKGROUND, loops=-1)
 
+        # Instancia o nível com as configurações atuais
         self.level = Level(
             self.window,
             self.current_level,
@@ -87,6 +87,7 @@ class Game:
         )
         result = self.level.run()
 
+        # Decide para qual estado ir baseado no resultado retornado pela classe Level
         if result == 'game_over':
             self.state = GAME_STATE_GAME_OVER
         elif result in ['next_level', 'win']:
@@ -96,16 +97,9 @@ class Game:
             self.state = GAME_STATE_MENU
 
     def _run_game_over(self):
-        """
-        Tela de derrota: Exibe a pontuação final e permite reiniciar com ESPAÇO.
-        """
-        print("▶ Processando fim de jogo...")
-
+        """Exibe a tela de derrota com a pontuação e aguarda comando para reiniciar ou sair."""
         final_score = self.level.mediator.get_score() if self.level else 0
-
-        # Chama a classe Score apenas para garantir o carregamento do módulo
-        # Removida a variável 'score_manager' para eliminar o aviso de não utilizada.
-        Score(DB_PATH)
+        Score(DB_PATH) # Sincroniza o módulo de pontuação
 
         waiting = True
         font_big = pygame.font.Font(None, 80)
@@ -118,15 +112,15 @@ class Game:
                     self.running = False
                     waiting = False
                 if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_SPACE:
-                        # Reinicia o progresso do jogo
+                    if event.key == pygame.K_SPACE: # Reinicia o progresso
                         self.current_level = 1
                         self.state = GAME_STATE_PLAYING
                         waiting = False
-                    elif event.key == pygame.K_ESCAPE:
+                    elif event.key == pygame.K_ESCAPE: # Volta ao menu
                         self.state = GAME_STATE_MENU
                         waiting = False
 
+            # Desenha o fundo da última fase com uma camada preta semitransparente por cima
             if self.level:
                 self.level.draw()
 
@@ -134,7 +128,7 @@ class Game:
             overlay.fill((0, 0, 0, 180))
             self.window.blit(overlay, (0, 0))
 
-            # Renderização da interface de texto
+            # Renderiza as mensagens de Game Over e Pontuação
             text_game_over = font_big.render("GAME OVER", True, C_RED)
             text_score = font_medium.render(f"PONTUAÇÃO FINAL: {final_score}", True, C_WHITE)
             text_retry = font_small.render("ESPAÇO para Reiniciar | ESC para Menu", True, (200, 200, 200))
@@ -147,7 +141,7 @@ class Game:
             self.clock.tick(FPS)
 
     def _run_win(self):
-        """Tela de vitória entre níveis."""
+        """Tela de transição exibida ao concluir um nível com sucesso."""
         waiting = True
         while waiting:
             for event in pygame.event.get():
@@ -163,6 +157,7 @@ class Game:
             if self.level:
                 self.level.draw()
 
+            # Camada visual para destacar a mensagem de vitória
             overlay = pygame.Surface((WIN_WIDTH, WIN_HEIGHT), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 150))
             self.window.blit(overlay, (0, 0))
@@ -175,7 +170,7 @@ class Game:
             self.clock.tick(FPS)
 
     def _show_high_scores(self):
-        """Busca no banco de dados e exibe o ranking."""
+        """Busca as melhores pontuações salvas e desenha a lista de recordes na tela."""
         scores = self.db_proxy.get_high_scores(limit=10)
         font_title = pygame.font.Font(None, 72)
         font_score = pygame.font.Font(None, 32)
@@ -186,13 +181,14 @@ class Game:
                 if event.type == pygame.QUIT:
                     self.running = False
                     showing = False
-                if event.type == pygame.KEYDOWN:
+                if event.type == pygame.KEYDOWN: # Sai da tela com qualquer tecla
                     showing = False
 
             self.window.fill(BACKGROUND_COLOR)
             title_text = font_title.render("HIGH SCORES", True, (0, 255, 255))
             self.window.blit(title_text, title_text.get_rect(center=(WIN_WIDTH // 2, 50)))
 
+            # Lista cada recorde encontrado no banco de dados
             y_offset = 150
             for i, (name, score, level, date) in enumerate(scores):
                 txt = font_score.render(f"{i + 1}. {name} - {score} Pts (Lvl {level})", True, C_WHITE)
@@ -205,7 +201,7 @@ class Game:
         self.state = GAME_STATE_MENU
 
     def _cleanup(self):
-        """Finaliza recursos de banco de dados e assets."""
+        """Fecha a conexão com o banco de dados e libera o áudio e memória antes de fechar."""
         self.db_proxy.close()
         self.asset_manager.unload_all()
         pygame.quit()
